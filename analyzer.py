@@ -20,12 +20,15 @@ class Op:
 class DNNL_Verbose:
     def __init__(self, args):
         self.args = args
-        self.version = ''
-        self.cpu_runtime = ''
-        self.cpu_isa = ''
-        self.gpu_runtime = ''
-        self.gpu_engine = ''
-        self.ops = []
+        self.dnn_version = ''
+        self.dnn_cpu_runtime = ''
+        self.dnn_cpu_isa = ''
+        self.dnn_gpu_runtime = ''
+        self.dnn_gpu_engine = ''
+        self.dnn_ops = []
+
+        self.mkl_version = ''
+        self.mkl_ops = []
 
     def load(self):
         try:
@@ -37,9 +40,9 @@ class DNNL_Verbose:
                         c = line.split(',')
                         if c[1] == 'info':
                             if c[2].startswith('Intel'):
-                                self.version = c[2]
+                                self.dnn_version = c[2]
                             if c[2].startswith('Detected ISA'):
-                                self.cpu_isa = ','.join(c[2:]).replace('Detected ISA is ', '')
+                                self.dnn_cpu_isa = ','.join(c[2:]).replace('Detected ISA is ', '')
                         else:
                             op = Op()
                             op.type = c[1]
@@ -51,26 +54,27 @@ class DNNL_Verbose:
                             op.aux = c[6]
                             op.reserved = ''
                             op.benchdnn = c[7]
-                            op.time = c[8]
-                            self.ops.append(op)
+                            op.time = float(c[8])
+                            self.dnn_ops.append(op)
+
                     if line.startswith('dnnl_verbose,'):
                         line = line.replace('\r', '')
                         line = line.replace('\n', '')
                         c = line.split(',')
                         if c[1] == 'info':
                             if len(c) == 3:
-                                self.version = c[2]
+                                self.dnn_version = c[2]
                             else:
                                 if c[2] == 'cpu':
                                     if c[3].startswith('runtime:'):
-                                        self.cpu_runtime = c[3].split(':')[1]
+                                        self.dnn_cpu_runtime = c[3].split(':')[1]
                                     if c[3].startswith('isa:'):
-                                        self.cpu_isa = c[3].split(':')[1]
+                                        self.dnn_cpu_isa = c[3].split(':')[1]
                                 if c[2] == 'gpu':
                                     if c[3].startswith('runtime:'):
-                                        self.gpu_runtime = c[3].split(':')[1]
+                                        self.dnn_gpu_runtime = c[3].split(':')[1]
                                     if c[3] == 'engine':
-                                        self.gpu_engine = c[5].split(':')[1]
+                                        self.dnn_gpu_engine = c[5].split(':')[1]
                         else:
                             op = Op()
                             op.type = c[1]
@@ -82,49 +86,115 @@ class DNNL_Verbose:
                             op.aux = c[7]
                             op.reserved = c[8]
                             op.benchdnn = c[9]
-                            op.time = c[10]
-                            self.ops.append(op)
+                            op.time = float(c[10])
+                            self.dnn_ops.append(op)
+
+                    if line.startswith('MKL_VERBOSE'):
+                        line = line.replace('\r', '')
+                        line = line.replace('\n', '')
+                        line = line[12:]
+                        if line.startswith('oneMKL') or line.startswith('Intel(R) MKL'):
+                            self.mkl_version = line
+                        else:
+                            c = line.split(' ')
+                            alg_raw = c[0]
+                            time_value = float(c[1][:-2])
+                            time_unit = c[1][-2:]
+                            if time_unit == 'ms':
+                                time_value = time_value * 1000
+                            op = Op()
+                            op.name = alg_raw.split('(')[0]
+                            op.time = time_value
+                            self.mkl_ops.append(op)
         except IOError:
             print('{} not accessible'.format(self.args.logfile))
 
     def print_sequence(self, print_create=False):
-        for op in self.ops:
+        for op in self.dnn_ops:
             if not print_create and op.type.startswith('create'):
                 continue
             print('{},{},{},{},{}'.format(op.type, op.name, op.device, op.benchdnn, op.time))
 
-    def getOpList(self):
-        return {op.name for op in self.ops}
+    def getOpList(self, lib='dnn'):
+        if lib == 'dnn':
+            return {op.name for op in self.dnn_ops}
+        else:
+            return {op.name for op in self.mkl_ops}
 
     def analyze_exec(self):
-        ops_time = {}
-        ops_num = {}
-        for op in self.getOpList():
-            time = 0
-            num = 0
-            for op1 in list(filter(lambda x: x.name == op and x.type == 'exec', self.ops)):
-                time += float(op1.time)
-                num += 1
-                # print('{}: {}, {}, {}, {}'.format(op1.name, op1.device, op1.iodata, op1.benchdnn, op1.time))
-            ops_time[op] = time
-            ops_num[op] = num
-        ops_time = sorted(ops_time.items(), key=lambda item:item[1], reverse=True)
-        # ops_time = collections.OrderedDict(ops_time)
-        print('\nOperations Summary')
-        for time in ops_time:
-            print('{}: {:.2f}ms, {} time(s)'.format(time[0], time[1], ops_num[time[0]]))
+        if len(self.dnn_ops) > 0:
+            ops_time = {}
+            ops_num = {}
+            for op in self.getOpList('dnn'):
+                time = 0
+                skip = 0
+                oplist = list(filter(lambda x: x.name == op and x.type == 'exec', self.dnn_ops))
+                num = len(oplist)
+                if num % self.args.iters == 0:
+                    t = num / self.args.iters
+                    skip = t * (self.args.iters - 1)
+                for i in range(num):
+                    if i < skip:
+                        continue
+                    time += oplist[i].time
+                    # print('{}: {}, {}, {}, {}'.format(op1.name, op1.device, op1.iodata, op1.benchdnn, op1.time))
+                if num % self.args.iters == 0:
+                    num = num / self.args.iters
+                else:
+                    num = num / float(self.args.iters)
+                    time = time / self.args.iters
+                ops_time[op] = time
+                ops_num[op] = num
+            ops_time = sorted(ops_time.items(), key=lambda item:item[1], reverse=True)
+            # ops_time = collections.OrderedDict(ops_time)
+
+            print('onednn_version:     {}'.format(self.dnn_version))
+            print('onednn_cpu_runtime: {}'.format(self.dnn_cpu_runtime))
+            print('onednn_cpu_isa:     {}'.format(self.dnn_cpu_isa))
+            print('onednn_gpu_runtime: {}'.format(self.dnn_gpu_runtime))
+            print('onednn_gpu_engine:  {}'.format(self.dnn_gpu_engine))
+            print('')
+            for time in ops_time:
+                print('{}: {:.2f}ms, {:.2f} time(s)'.format(time[0], time[1], ops_num[time[0]]))
+
+        if len(self.mkl_ops) > 0:
+            ops_time = {}
+            ops_num = {}
+            for op in self.getOpList('mkl'):
+                time = 0
+                skip = 0
+                oplist = list(filter(lambda x: x.name == op, self.mkl_ops))
+                num = len(oplist)
+                if num % self.args.iters == 0:
+                    t = num / self.args.iters
+                    skip = t * (self.args.iters - 1)
+                for i in range(num):
+                    if i < skip:
+                        continue
+                    time += oplist[i].time
+                    # print('{}: {}, {}, {}, {}'.format(op1.name, op1.device, op1.iodata, op1.benchdnn, op1.time))
+                if num % self.args.iters == 0:
+                    num = num / self.args.iters
+                else:
+                    num = num / float(self.args.iters)
+                    time = time / self.args.iters
+                ops_time[op] = time
+                ops_num[op] = num
+            ops_time = sorted(ops_time.items(), key=lambda item:item[1], reverse=True)
+            # ops_time = collections.OrderedDict(ops_time)
+
+            print('onemkl_version:     {}'.format(self.mkl_version))
+            print('')
+            for time in ops_time:
+                print('{}: {:.2f}ms, {:.2f} time(s)'.format(time[0], time[1]/1000, ops_num[time[0]]))
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('logfile')
+    parser.add_argument("--iters", default=1, type=int)
     args = parser.parse_args()
     dv = DNNL_Verbose(args)
     dv.load()
-    print('version:     {}'.format(dv.version))
-    print('cpu_runtime: {}'.format(dv.cpu_runtime))
-    print('cpu_isa:     {}'.format(dv.cpu_isa))
-    print('gpu_runtime: {}'.format(dv.gpu_runtime))
-    print('gpu_engine:  {}'.format(dv.gpu_engine))
     dv.analyze_exec()
     # dv.print_sequence()
 
