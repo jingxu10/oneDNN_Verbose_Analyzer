@@ -148,14 +148,17 @@ class DNNL_Verbose:
             ops_time = sorted(ops_time.items(), key=lambda item:item[1], reverse=True)
             # ops_time = collections.OrderedDict(ops_time)
 
+            print('======================')
             print('onednn_version:     {}'.format(self.dnn_version))
             print('onednn_cpu_runtime: {}'.format(self.dnn_cpu_runtime))
             print('onednn_cpu_isa:     {}'.format(self.dnn_cpu_isa))
             print('onednn_gpu_runtime: {}'.format(self.dnn_gpu_runtime))
             print('onednn_gpu_engine:  {}'.format(self.dnn_gpu_engine))
             print('')
+            print('op name;dur (ms);num occurrence')
             for time in ops_time:
-                print('{}: {:.2f}ms, {:.2f} time(s)'.format(time[0], time[1], ops_num[time[0]]))
+                print('{};{:.2f};{:.2f}'.format(time[0], time[1], ops_num[time[0]]))
+            print('')
 
         if len(self.mkl_ops) > 0:
             ops_time = {}
@@ -183,10 +186,13 @@ class DNNL_Verbose:
             ops_time = sorted(ops_time.items(), key=lambda item:item[1], reverse=True)
             # ops_time = collections.OrderedDict(ops_time)
 
+            print('======================')
             print('onemkl_version:     {}'.format(self.mkl_version))
             print('')
+            print('op name;dur (ms);num occurrence')
             for time in ops_time:
-                print('{}: {:.2f}ms, {:.2f} time(s)'.format(time[0], time[1]/1000, ops_num[time[0]]))
+                print('{};{:.2f};{:.2f}'.format(time[0], time[1]/1000, ops_num[time[0]]))
+            print('')
 
 def main():
     parser = argparse.ArgumentParser()
