@@ -57,7 +57,7 @@ class DNNL_Verbose:
                             op.time = float(c[8])
                             self.dnn_ops.append(op)
 
-                    if line.startswith('dnnl_verbose,'):
+                    if line.startswith('dnnl_verbose,') or line.startswith('onednn_verbose,'):
                         line = line.replace('\r', '')
                         line = line.replace('\n', '')
                         c = line.split(',')
